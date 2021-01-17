@@ -31,7 +31,7 @@ def main(args):
         MODEL_DICT[args.model].reproduce(
             args.n_epochs,
             args.batch_size,
-            args.log_dir,
+            args.logdir,
             device,
             # Evaluation Flag:
             args.eval,
