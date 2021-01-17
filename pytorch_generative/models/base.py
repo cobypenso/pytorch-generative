@@ -8,8 +8,7 @@ from torch import nn
 
 
 def _default_sample_fn(logits):
-    return torch.multinomial(torch.squeeze(logits),1)
-    #return distributions.Bernoulli(logits=logits).sample()
+    return distributions.Bernoulli(logits=logits).sample()
 
 
 class GenerativeModel(abc.ABC, nn.Module):

@@ -378,6 +378,8 @@ class VeryDeepVAE(base.GenerativeModel):
         self._output = nn.Conv2d(
             in_channels=hidden_channels, out_channels=out_channels, kernel_size=1
         )
+        
+        self._logsoftmax = nn.LogSoftmax(dim = 1)
 
     def forward(self, x):
         """Computes the forward pass.
@@ -389,9 +391,10 @@ class VeryDeepVAE(base.GenerativeModel):
             prior and the posterior. Note that the KL Divergence is NOT normalized by
             the dimension of the input.
         """
-        
-        x = torch.round(127.5 * (clusters[x.long()] + 1.0))
-        
+        x = (clusters[x.squeeze().long()] + 1.0) / 2
+        x = x.permute(0, 3, 1, 2).contiguous()
+        x = x.to(self.device)
+        #x = torch.round(127.5 * (clusters[x.squeeze().long()] + 1.0)).permute(0,3,1,2)
         n = x.shape[0]
         # Bottom up encoding.
         x = self._input(x)
@@ -413,8 +416,10 @@ class VeryDeepVAE(base.GenerativeModel):
         kl_div = torch.zeros((n,), device=self.device)
         for div in kl_divs:
             kl_div += div.sum(dim=(1, 2, 3))
-
-        return self._output(x), kl_div
+        
+        output = self._output(x)
+        
+        return self._logsoftmax(output), kl_div
 
     def sample(self, n_samples):
         x = torch.zeros_like(self._biases[-1]).repeat(n_samples, 1, 1, 1)
@@ -422,7 +427,8 @@ class VeryDeepVAE(base.GenerativeModel):
             x += bias.repeat(n_samples, 1, 1, 1)
             x, _ = stack(x)
         out = self._output(x)
-        out = self._sample_fn(torch.exp(out))
+        out = self._logsoftmax(out)
+        out = torch.exp(out)
         return out
 
 
@@ -497,9 +503,10 @@ def reproduce(
     def loss_fn(x, _, preds):
         preds, kl_div = preds
         criterion = nn.NLLLoss()
-        B, C, D = preds.size()
-        preds_2d = preds.view(B, C, D, -1)
-        x_2d = x.view(B, D, -1)
+        B, P, W, H = preds.size()
+        
+        preds_2d = preds.view(B, P, W*H)
+        x_2d = x.view(B, W*H)
         #recon_loss = F.binary_cross_entropy_with_logits(preds, x, reduction="none")
         #recon_loss = recon_loss.sum(dim=(1, 2, 3))
         recon_loss = criterion(preds_2d, x_2d.long())
@@ -511,10 +518,9 @@ def reproduce(
         }
 
     def sample_fn(model):
-        sample = torch.sigmoid(model.sample(n_samples=16))
-        return torch.where(
-            sample < 0.5, torch.zeros_like(sample), torch.ones_like(sample)
-        )
+        import ipdb; ipdb.set_trace()
+        logits = model.sample(n_samples=16)
+        return torch.multinomial(torch.squeeze(logits),1)
 
     model_trainer = trainer.Trainer(
         model=model,

@@ -72,15 +72,15 @@ class Trainer:
         """
         # Stateful objects that need to be saved.
         self.model = model.to(device)
-        self.optimizer = optimizer
-        self.lr_scheduler = lr_scheduler
+        self._optimizer = optimizer
+        self._lr_scheduler = lr_scheduler
 
         self.loss_fn = loss_fn
         self.train_loader = train_loader
         self.eval_loader = eval_loader
         self.clip_grad_norm = clip_grad_norm
         self.skip_grad_norm = skip_grad_norm
-        self.save_checkpoint_epochs = save_checkpoint_epochs
+        self._save_checkpoint_epochs = save_checkpoint_epochs
         self.device = torch.device(device) if isinstance(device, str) else device
 
         self.sample_epochs = sample_epochs
@@ -112,7 +112,7 @@ class Trainer:
         fname_model = hp_str + "model_state"
         fname_optimizer = hp_str + "optimizer_state"
         fname_lr_scheduler = hp_str + "lr_scheduler_state"
-        torch.save(self._model.state_dict(), self._path(fname_model))
+        torch.save(self.model.state_dict(), self._path(fname_model))
         torch.save(self._optimizer.state_dict(), self._path(fname_optimizer))
         if self._lr_scheduler is not None:
             torch.save(
@@ -127,7 +127,7 @@ class Trainer:
 
     def load_from_checkpoint(self):
         """Attempts to load Trainer state from the internal log_dir."""
-        self._model.load_state_dict(torch.load(self._path(self.hp_str + "_model_state")))
+        self.model.load_state_dict(torch.load(self._path(self.hp_str + "_model_state")))
         self._optimizer.load_state_dict(torch.load(self._path(self.hp_str + "_optimizer_state")))
         if self._lr_scheduler is not None:
             self._lr_scheduler.load_state_dict(
@@ -163,6 +163,8 @@ class Trainer:
 
         Subclasses can override this method to define custom training loops.
         """
+        x = x.view(x.shape[0], 1, 32, 32)
+        x = x.to(self.device)
         preds = self.model(x)
         loss = self.loss_fn(x, y, preds)
         return loss
@@ -172,7 +174,7 @@ class Trainer:
         x = x.to(self.device)
         if y is not None:
             y = y.to(self.device)
-        self.optimizer.zero_grad()
+        self._optimizer.zero_grad()
         loss = self._get_loss_dict(self.train_one_batch(x, y))
         loss["loss"].backward()
 
@@ -182,9 +184,9 @@ class Trainer:
             norm = utils.clip_grad_norm(self.model.parameters(), max_norm).item()
 
         if not self.skip_grad_norm or norm <= self.skip_grad_norm:
-            self.optimizer.step()
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+            self._optimizer.step()
+            if self._lr_scheduler is not None:
+                self._lr_scheduler.step()
 
         return {k: v.item() for k, v in loss.items()}
 
@@ -193,6 +195,8 @@ class Trainer:
 
         Subclasses can override this method to define custom evaluation loops.
         """
+        x = x.view(x.shape[0], 1, 32, 32)
+        x = x.to(self.device)
         preds = self.model(x)
         loss = self.loss_fn(x, y, preds)
         return loss
@@ -225,7 +229,7 @@ class Trainer:
 
             for i in range(10):
                 print("------------------ Sampling " + str(i) + " out of 10 (long) ------------------")
-                sample = self._model.sample(out_shape=[1024, 1])
+                sample = self.model.sample(out_shape=[1024, 1])
                 sample = torch.reshape(sample, [32, 32])
                 sample = sample[None, :, :]
                 sample = torch.round(127.5 * (clusters[sample.long()] + 1.0))
@@ -254,7 +258,7 @@ class Trainer:
 
                 # Load Model
                 self.load_from_checkpoint() # Fix path
-                self._model.eval()
+                self.model.eval()
                 total_examples, total_loss = 0, collections.defaultdict(int)
 
                 eval_results_arr = []
@@ -303,7 +307,7 @@ class Trainer:
                 self._examples_processed += x.shape[0]
                 lrs = {
                     f"group_{i}": param["lr"]
-                    for i, param in enumerate(self.optimizer.param_groups)
+                    for i, param in enumerate(self._optimizer.param_groups)
                 }
                 self._summary_writer.add_scalars("loss/lr", lrs, self._step)
                 loss = self._train_one_batch(x, y)
@@ -324,7 +328,7 @@ class Trainer:
                 self._summary_writer.add_scalar("speed/epoch", self._epoch, self._step)
                 self._summary_writer.add_scalar("speed/step", self._step, self._step)
                 self._step += 1
-
+                
             # Evaluate
             total_examples, total_loss = 0, collections.defaultdict(int)
             for batch in self.eval_loader:
