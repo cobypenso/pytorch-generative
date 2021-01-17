@@ -31,7 +31,7 @@ class Trainer:
         optimizer,
         train_loader,
         eval_loader,
-        save_checkpoint_epochs=1,
+        save_checkpoint_epochs=10,
         sample_epochs=50,
         lr_scheduler=None,
         device="cpu",
@@ -163,7 +163,6 @@ class Trainer:
 
         Subclasses can override this method to define custom training loops.
         """
-        x = x.view(x.shape[0], 1, 32, 32)
         x = x.to(self.device)
         preds = self.model(x)
         loss = self.loss_fn(x, y, preds)
@@ -176,7 +175,7 @@ class Trainer:
             y = y.to(self.device)
         self._optimizer.zero_grad()
         loss = self._get_loss_dict(self.train_one_batch(x, y))
-        loss["loss"].backward()
+        loss["recon_loss"].backward()
 
         norm = 0
         max_norm = self.clip_grad_norm or self.skip_grad_norm or None
@@ -195,7 +194,6 @@ class Trainer:
 
         Subclasses can override this method to define custom evaluation loops.
         """
-        x = x.view(x.shape[0], 1, 32, 32)
         x = x.to(self.device)
         preds = self.model(x)
         loss = self.loss_fn(x, y, preds)
@@ -210,41 +208,15 @@ class Trainer:
             loss = self._get_loss_dict(self.eval_one_batch(x, y))
             return {k: v.item() for k, v in loss.items()}
 
-    def _sample(self):
-    
+    def plot_images_grid(x: torch.tensor, export_img, title: str = '', nrow=8, padding=2, normalize=True,
+                         pad_value=0):
+        """Plot 4D Tensor of images of shape (B x C x H x W) as a grid."""
 
-        def plot_images_grid(x: torch.tensor, export_img, title: str = '', nrow=8, padding=2, normalize=True,
-                             pad_value=0):
-            """Plot 4D Tensor of images of shape (B x C x H x W) as a grid."""
-
-            grid = torchvision.utils.make_grid(x, nrow=nrow, padding=padding, normalize=normalize, pad_value=pad_value)
-            npgrid = grid.cpu().numpy()
-            im = np.transpose(npgrid, (1, 2, 0))
-            plt.imsave(export_img, im)
-
-        ####################################################################################################################
-        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~EB~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        # Sampling while training :
-        if self._epoch % self._sample_epochs == 0:
-
-            for i in range(10):
-                print("------------------ Sampling " + str(i) + " out of 10 (long) ------------------")
-                sample = self.model.sample(out_shape=[1024, 1])
-                sample = torch.reshape(sample, [32, 32])
-                sample = sample[None, :, :]
-                sample = torch.round(127.5 * (clusters[sample.long()] + 1.0))
-                sample = sample.permute(0, 3, 1, 2)
-
-                cwd = os.getcwd()
-                dir = self._log_dir + "/samples"
-                if not os.path.exists(dir):
-                    os.makedirs(dir)
-
-                f_name = dir + "/" + "sample_epoch_" + str(self._epoch) + "_image_" + str(i) + ".png"
-                plot_images_grid(sample, f_name)
-            self._summary_writer.add_images("sample", sample, self._step)
-        ####################################################################################################################
-
+        grid = torchvision.utils.make_grid(x, nrow=nrow, padding=padding, normalize=normalize, pad_value=pad_value)
+        npgrid = grid.cpu().numpy()
+        im = np.transpose(npgrid, (1, 2, 0))
+        plt.imsave(export_img, im)
+            
     def interleaved_train_and_eval(self, n_epochs):
         """Trains and evaluates (after each epoch) for n_epochs."""
 
@@ -252,55 +224,9 @@ class Trainer:
             start_time = time.time()
             print("------------------ Epoch = " + str(epoch) + " ------------------")
 
-            # Evaluate
-
-            if self.evalFlag:
-
-                # Load Model
-                self.load_from_checkpoint() # Fix path
-                self.model.eval()
-                total_examples, total_loss = 0, collections.defaultdict(int)
-
-                eval_results_arr = []
-
-                # run evaluation on test set :
-
-                for batch in self._eval_loader:
-                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
-                    x, y = batch
-                    x, y = x.to('cuda'), y.to('cuda')
-                    n_examples = x.shape[0]
-                    total_examples += n_examples
-                    for key, loss in self._eval_one_batch(x, y).items():
-                        total_loss[key] += loss * n_examples
-
-                    sample = x.cpu().numpy()
-                    x_loss = (sample, loss)
-                    eval_results_arr.append(x_loss)
-
-                # run evaluation on train set :
-
-                for i, batch in enumerate(self._train_loader):
-                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
-                    x, y = batch
-                    x, y = x.to('cuda'), y.to('cuda')
-                    n_examples = x.shape[0]
-                    total_examples += n_examples
-                    for key, loss in self._eval_one_batch(x, y).items():
-                        total_loss[key] += loss * n_examples
-
-                    sample = x.cpu().numpy()
-                    x_loss = (sample, loss)
-                    eval_results_arr.append(x_loss)
-
-                import pickle
-                pickle.dump(eval_results_arr, open(self.hp_str + "_eval.p", "wb"))
-                break
-
-                loss = {key: loss / total_examples for key, loss in total_loss.items()}
-                self._log_loss_dict(loss, training=False)
-
             # Train.
+            epoch_loss = 0
+            epoch_recon_loss = 0
             for i, batch in enumerate(self.train_loader):
                 batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
                 x, y = batch
@@ -311,6 +237,8 @@ class Trainer:
                 }
                 self._summary_writer.add_scalars("loss/lr", lrs, self._step)
                 loss = self._train_one_batch(x, y)
+                epoch_loss += loss['loss']
+                epoch_recon_loss += loss['recon_loss']
                 self._log_loss_dict(loss, training=True)
 
                 self._time_taken += time.time() - start_time
@@ -328,7 +256,9 @@ class Trainer:
                 self._summary_writer.add_scalar("speed/epoch", self._epoch, self._step)
                 self._summary_writer.add_scalar("speed/step", self._step, self._step)
                 self._step += 1
-                
+            
+            print("Epoch: ", epoch, " Loss: ", epoch_loss / i, " recon loss: ", epoch_recon_loss / i)
+            
             # Evaluate
             total_examples, total_loss = 0, collections.defaultdict(int)
             for batch in self.eval_loader:
@@ -346,7 +276,9 @@ class Trainer:
             if self.sample_epochs and self._epoch % self.sample_epochs == 0:
                 self.model.eval()
                 with torch.no_grad():
-                    tensor = self.sample_fn(self.model)
-                self._summary_writer.add_images("sample", tensor, self._step)
+                    sample = self.sample_fn(self.model)
+                sample = torch.round(127.5 * (clusters[sample.long()] + 1.0))
+                sample = sample.permute(0, 3, 1, 2)
+                self._summary_writer.add_images("sample", sample, self._step)
 
         self._summary_writer.close()

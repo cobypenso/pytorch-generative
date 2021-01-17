@@ -13,6 +13,7 @@ import torch
 from torch import nn
 
 from pytorch_generative.models import base
+import matplotlib.pyplot as plt
 
 pathToCluster = "/home/dsi/coby_penso/projects/generative_models/VD_VAE/kmeans_centers.npy"  # TODO : add path to cluster dir
 global clusters
@@ -391,10 +392,19 @@ class VeryDeepVAE(base.GenerativeModel):
             prior and the posterior. Note that the KL Divergence is NOT normalized by
             the dimension of the input.
         """
+        # ----- x: [128,1024] ----- #
         x = (clusters[x.squeeze().long()] + 1.0) / 2
-        x = x.permute(0, 3, 1, 2).contiguous()
+        # ----- x: [128,1024, 3] ----- #
+        x = x[:,:,None,:]
+        # ----- x: [128,1024,1,3] ----- #
+        x = torch.reshape(x, [x.shape[0], 32, 32, x.shape[3]])
+        # ----- x: [128,32,32,3] ----- #
+        x = x.permute(0,3,1,2)
+        # ----- x: [128,3,32,32] ----- #
+        
+        
         x = x.to(self.device)
-        #x = torch.round(127.5 * (clusters[x.squeeze().long()] + 1.0)).permute(0,3,1,2)
+        input_img = x
         n = x.shape[0]
         # Bottom up encoding.
         x = self._input(x)
@@ -418,7 +428,6 @@ class VeryDeepVAE(base.GenerativeModel):
             kl_div += div.sum(dim=(1, 2, 3))
         
         output = self._output(x)
-        
         return self._logsoftmax(output), kl_div
 
     def sample(self, n_samples):
@@ -497,18 +506,18 @@ def reproduce(
         hidden_channels=64,
         bottleneck_channels=32,
     )
-    optimizer = optim.Adam(model.parameters(), lr=5e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda _: 0.999977)
 
     def loss_fn(x, _, preds):
+        x = x.long()
         preds, kl_div = preds
         criterion = nn.NLLLoss()
         B, P, W, H = preds.size()
         
         preds_2d = preds.view(B, P, W*H)
         x_2d = x.view(B, W*H)
-        #recon_loss = F.binary_cross_entropy_with_logits(preds, x, reduction="none")
-        #recon_loss = recon_loss.sum(dim=(1, 2, 3))
+
         recon_loss = criterion(preds_2d, x_2d.long())
         elbo = recon_loss + kl_div
         return {
@@ -518,9 +527,13 @@ def reproduce(
         }
 
     def sample_fn(model):
-        import ipdb; ipdb.set_trace()
+    
         logits = model.sample(n_samples=16)
-        return torch.multinomial(torch.squeeze(logits),1)
+        logits = logits.permute(0,2,3,1)
+        logits = logits.reshape(-1, 512)
+        sample = torch.reshape(torch.multinomial(logits, 1), [16, 32, 32])
+
+        return sample
 
     model_trainer = trainer.Trainer(
         model=model,
