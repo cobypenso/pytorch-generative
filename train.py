@@ -3,7 +3,13 @@
 import argparse
 
 import pytorch_generative as pg
-
+import torch
+from torch import distributions
+from torch import nn
+from torch import optim
+from torch.optim import lr_scheduler
+from torchvision import datasets
+from torchvision import transforms
 
 MODEL_DICT = {
     "gated_pixel_cnn": pg.models.gated_pixel_cnn,
@@ -21,9 +27,23 @@ MODEL_DICT = {
 
 def main(args):
     device = "cuda" if args.use_cuda else "cpu"
-    MODEL_DICT[args.model].reproduce(
-        args.n_epochs, args.batch_size, args.logdir, device
-    )
+    if args.model == "vd_vae":
+        MODEL_DICT[args.model].reproduce(
+            args.n_epochs,
+            args.batch_size,
+            args.log_dir,
+            device,
+            # Evaluation Flag:
+            args.eval,
+            args.eval_dir
+        )
+    else:
+        MODEL_DICT[args.model].reproduce(
+            args.n_epochs,
+            args.batch_size, 
+            args.logdir, 
+            device
+        )
 
 
 if __name__ == "__main__":
@@ -32,7 +52,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         help="the available models to train",
-        default="nade",
+        default="vd_vae",
         choices=list(MODEL_DICT.keys()),
     )
     parser.add_argument(
@@ -49,6 +69,17 @@ if __name__ == "__main__":
         type=str,
         help="the directory where to log model parameters and TensorBoard metrics",
         default="/tmp/run",
+    )
+    parser.add_argument(
+        "--eval_dir",
+        type=str,
+        help="the directory where to log data",
+        default="./tmp/run",
+    )
+    parser.add_argument(
+        "--eval",
+        help="Evaluation mode",
+        action="store_true"
     )
     parser.add_argument("--use-cuda", help="whether to use CUDA", action="store_true")
     args = parser.parse_args()

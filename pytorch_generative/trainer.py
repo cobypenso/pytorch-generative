@@ -8,7 +8,13 @@ import time
 import torch
 from torch.nn import utils
 from torch.utils import tensorboard
+import numpy as np
+import torchvision
+import matplotlib.pyplot as plt
 
+pathToCluster = r"/home/dsi/eyalbetzalel/image-gpt/downloads/kmeans_centers.npy"  # TODO : add path to cluster dir
+global clusters
+clusters = torch.from_numpy(np.load(pathToCluster)).float()
 
 class Trainer:
     """An object which encapsulates the training and evaluation loop.
@@ -25,14 +31,16 @@ class Trainer:
         optimizer,
         train_loader,
         eval_loader,
+        save_checkpoint_epochs=1,
+        sample_epochs=50,
         lr_scheduler=None,
+        device="cpu",
+        log_dir=None,
         clip_grad_norm=None,
         skip_grad_norm=None,
-        sample_epochs=None,
         sample_fn=None,
-        log_dir=None,
-        save_checkpoint_epochs=1,
-        device="cpu",
+        evaldir=None,
+        evalFlag=False
     ):
         """Initializes a new Trainer instance.
 
@@ -72,58 +80,70 @@ class Trainer:
         self.eval_loader = eval_loader
         self.clip_grad_norm = clip_grad_norm
         self.skip_grad_norm = skip_grad_norm
-        self.log_dir = log_dir or tempfile.mkdtemp()
         self.save_checkpoint_epochs = save_checkpoint_epochs
         self.device = torch.device(device) if isinstance(device, str) else device
 
         self.sample_epochs = sample_epochs
         self.sample_fn = sample_fn
-        if self.sample_epochs:
-            msg = "sample_fn cannot be None if sample_epochs is not None"
-            assert self.sample_fn, msg
+        # if self.sample_epochs:
+        #     msg = "sample_fn cannot be None if sample_epochs is not None"
+        #     assert self.sample_fn, msg
 
         self._step = 0
         self._epoch = 0
         self._examples_processed = 0
         self._time_taken = 0
-
+        self.hp_str = "ep_" + str(self._epoch) + "_ch_" + str(self.n_channels) + "_psb_" + str(self.n_pixel_snail_blocks) + "_resb_" + \
+            str(self.n_residual_blocks) + "_atval_" + str(self.attention_value_channels) + \
+            "_attk_" + str(self.attention_key_channels)
+        self._log_dir = (log_dir + "/" + self.hp_str + "_testEval") # or tempfile.mkdtemp()
         self._summary_writer = tensorboard.SummaryWriter(self.log_dir, max_queue=100)
+        self.evalFlag = evalFlag
+        self.evaldir = evaldir
 
     def _path(self, file_name):
         return os.path.join(self.log_dir, file_name)
 
     def _save_checkpoint(self):
-        if self._epoch % self.save_checkpoint_epochs != 0:
+        if self._epoch % self._save_checkpoint_epochs != 0:
             return
 
-        torch.save(self.model.state_dict(), self._path("model_state"))
-        torch.save(self.optimizer.state_dict(), self._path("optimizer_state"))
-        if self.lr_scheduler is not None:
-            torch.save(self.lr_scheduler.state_dict(), self._path("lr_scheduler_state"))
+        hp_str = self.hp_str + "_epoch_" + str(self._epoch) + "_"
+
+        fname_model = hp_str + "model_state"
+        fname_optimizer = hp_str + "optimizer_state"
+        fname_lr_scheduler = hp_str + "lr_scheduler_state"
+        torch.save(self._model.state_dict(), self._path(fname_model))
+        torch.save(self._optimizer.state_dict(), self._path(fname_optimizer))
+        if self._lr_scheduler is not None:
+            torch.save(
+                self._lr_scheduler.state_dict(), self._path(fname_lr_scheduler)
+            )
         # TODO(eugenhotaj): Instead of saving these internal counters one at a
         # time, maybe we can save them as a dictionary.
-        torch.save(self._step, self._path("step"))
-        torch.save(self._epoch, self._path("epoch"))
-        torch.save(self._examples_processed, self._path("examples_processed"))
-        torch.save(self._time_taken, self._path("time_taken"))
+        torch.save(self._step, self._path(hp_str + "step"))
+        torch.save(self._epoch, self._path(hp_str + "epoch"))
+        torch.save(self._examples_processed, self._path(hp_str + "examples_processed"))
+        torch.save(self._time_taken, self._path(hp_str + "time_taken"))
 
     def load_from_checkpoint(self):
         """Attempts to load Trainer state from the internal log_dir."""
-        self.model.load_state_dict(torch.load(self._path("model_state")))
-        self.optimizer.load_state_dict(torch.load(self._path("optimizer_state")))
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.load_state_dict(
-                torch.load(self._path("lr_scheduler_state"))
+        import ipdb; ipdb.set_trace()
+        self._model.load_state_dict(torch.load(self._path(self.hp_str + "_model_state")))
+        self._optimizer.load_state_dict(torch.load(self._path(self.hp_str + "_optimizer_state")))
+        if self._lr_scheduler is not None:
+            self._lr_scheduler.load_state_dict(
+                torch.load(self._path(self.hp_str + "_lr_scheduler_state"))
             )
-        self._step = torch.load(self._path("step"))
-        self._epoch = torch.load(self._path("epoch"))
-        self._examples_processed = torch.load(self._path("examples_processed"))
-        self._time_taken = torch.load(self._path("time_taken"))
+        self._step = torch.load(self._path(self.hp_str + "_step"))
+        self._epoch = torch.load(self._path(self.hp_str + "_epoch"))
+        self._examples_processed = torch.load(self._path(self.hp_str + "_examples_processed"))
+        self._time_taken = torch.load(self._path(self.hp_str + "_time_taken"))
         # NOTE(eugenhotaj): We need to replace the SummaryWriter and ensure any
         # logs written after the last saved checkpoint are purged.
         self._summary_writer.close()
         self._summary_writer = tensorboard.SummaryWriter(
-            self.log_dir, max_queue=100, purge_step=self._step
+            self._log_dir, max_queue=100, purge_step=self._step
         )
 
     def _get_loss_dict(self, loss):
@@ -188,11 +208,96 @@ class Trainer:
             loss = self._get_loss_dict(self.eval_one_batch(x, y))
             return {k: v.item() for k, v in loss.items()}
 
+    def _sample(self):
+    
+
+        def plot_images_grid(x: torch.tensor, export_img, title: str = '', nrow=8, padding=2, normalize=True,
+                             pad_value=0):
+            """Plot 4D Tensor of images of shape (B x C x H x W) as a grid."""
+
+            grid = torchvision.utils.make_grid(x, nrow=nrow, padding=padding, normalize=normalize, pad_value=pad_value)
+            npgrid = grid.cpu().numpy()
+            im = np.transpose(npgrid, (1, 2, 0))
+            plt.imsave(export_img, im)
+
+        ####################################################################################################################
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~EB~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # Sampling while training :
+        if self._epoch % self._sample_epochs == 0:
+
+            for i in range(10):
+                print("------------------ Sampling " + str(i) + " out of 10 (long) ------------------")
+                sample = self._model.sample(out_shape=[1024, 1])
+                sample = torch.reshape(sample, [32, 32])
+                sample = sample[None, :, :]
+                sample = torch.round(127.5 * (clusters[sample.long()] + 1.0))
+                sample = sample.permute(0, 3, 1, 2)
+
+                cwd = os.getcwd()
+                dir = self._log_dir + "/samples"
+                if not os.path.exists(dir):
+                    os.makedirs(dir)
+
+                f_name = dir + "/" + "sample_epoch_" + str(self._epoch) + "_image_" + str(i) + ".png"
+                plot_images_grid(sample, f_name)
+            self._summary_writer.add_images("sample", sample, self._step)
+        ####################################################################################################################
+
     def interleaved_train_and_eval(self, n_epochs):
         """Trains and evaluates (after each epoch) for n_epochs."""
 
-        for _ in range(n_epochs):
+        for epoch in range(n_epochs):
             start_time = time.time()
+            print("------------------ Epoch = " + str(epoch) + " ------------------")
+
+            # Evaluate
+
+            if self.evalFlag:
+
+                # Load Model
+                self.load_from_checkpoint() # Fix path
+                self._model.eval()
+                total_examples, total_loss = 0, collections.defaultdict(int)
+
+                eval_results_arr = []
+
+                # run evaluation on test set :
+
+                for batch in self._eval_loader:
+                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
+                    x, y = batch
+                    x, y = x.to('cuda'), y.to('cuda')
+                    n_examples = x.shape[0]
+                    total_examples += n_examples
+                    for key, loss in self._eval_one_batch(x, y).items():
+                        total_loss[key] += loss * n_examples
+
+                    sample = x.cpu().numpy()
+                    x_loss = (sample, loss)
+                    eval_results_arr.append(x_loss)
+
+                # run evaluation on train set :
+
+                for i, batch in enumerate(self._train_loader):
+                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
+                    x, y = batch
+                    x, y = x.to('cuda'), y.to('cuda')
+                    n_examples = x.shape[0]
+                    total_examples += n_examples
+                    for key, loss in self._eval_one_batch(x, y).items():
+                        total_loss[key] += loss * n_examples
+
+                    sample = x.cpu().numpy()
+                    x_loss = (sample, loss)
+                    eval_results_arr.append(x_loss)
+
+                import pickle
+                pickle.dump(eval_results_arr, open(self.hp_str + "_eval.p", "wb"))
+                import ipdb; ipdb.set_trace()
+                break
+
+                loss = {key: loss / total_examples for key, loss in total_loss.items()}
+                self._log_loss_dict(loss, training=False)
 
             # Train.
             for i, batch in enumerate(self.train_loader):

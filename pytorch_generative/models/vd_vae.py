@@ -416,11 +416,13 @@ class VeryDeepVAE(base.GenerativeModel):
         for stack, bias in zip(self._decoder, reversed(self._biases)):
             x += bias.repeat(n_samples, 1, 1, 1)
             x, _ = stack(x)
-        return self._output(x)
+        out = self._output(x)
+        out = self._sample_fn(torch.exp(out))
+        return out
 
 
 def reproduce(
-    n_epochs=500, batch_size=128, log_dir="/tmp/run", device="cuda", debug_loader=None
+    n_epochs=500, batch_size=128, log_dir="/tmp/run", device="cuda", evalFlag , evaldir, debug_loader=None
 ):
     """Training script with defaults to reproduce results.
 
@@ -438,16 +440,30 @@ def reproduce(
     """
     from torch import optim
     from torch.nn import functional as F
-
+    from torch.optim import lr_scheduler
+    from torch.utils import data
+    from torchvision import datasets
+    from torchvision import transforms
     from pytorch_generative import datasets
     from pytorch_generative import models
     from pytorch_generative import trainer
 
-    train_loader, test_loader = debug_loader, debug_loader
-    if train_loader is None:
-        train_loader, test_loader = datasets.get_mnist_loaders(
-            batch_size, dynamically_binarize=True, resize_to_32=True
-        )
+    import gmpm
+
+    train = gmpm.train
+    test = gmpm.test
+
+    train_loader = data.DataLoader(
+        data.TensorDataset(torch.Tensor(train),torch.rand(len(train))),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=8,
+    )
+    test_loader = data.DataLoader(
+        data.TensorDataset(torch.Tensor(test),torch.rand(len(test))),
+        batch_size=batch_size,
+        num_workers=8,
+    )
 
     stack_configs = [
         StackConfig(n_encoder_blocks=3, n_decoder_blocks=5),
@@ -458,9 +474,12 @@ def reproduce(
         StackConfig(n_encoder_blocks=1, n_decoder_blocks=1),
     ]
 
+    #In Channels = 3 , Out channels = 512#
     model = models.VeryDeepVAE(
-        in_channels=1,
-        out_channels=1,
+        # 3 channels - image after clusters mapping function as input to NN :
+        in_channels=3,
+        # 512 channels - each pixel get probability to get value from 0 to 511
+        out_channels=512,
         input_resolution=32,
         stack_configs=stack_configs,
         latent_channels=16,
@@ -468,11 +487,17 @@ def reproduce(
         bottleneck_channels=32,
     )
     optimizer = optim.Adam(model.parameters(), lr=5e-4)
+    scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda _: 0.999977)
 
     def loss_fn(x, _, preds):
         preds, kl_div = preds
-        recon_loss = F.binary_cross_entropy_with_logits(preds, x, reduction="none")
-        recon_loss = recon_loss.sum(dim=(1, 2, 3))
+        criterion = nn.NLLLoss()
+        B, C, D = preds.size()
+        preds_2d = preds.view(B, C, D, -1)
+        x_2d = x.view(B, D, -1)
+        #recon_loss = F.binary_cross_entropy_with_logits(preds, x, reduction="none")
+        #recon_loss = recon_loss.sum(dim=(1, 2, 3))
+        recon_loss = criterion(preds_2d, x_2d.long())
         elbo = recon_loss + kl_div
         return {
             "recon_loss": recon_loss.mean(),
@@ -496,5 +521,8 @@ def reproduce(
         sample_fn=sample_fn,
         log_dir=log_dir,
         device=device,
+        evalFlag=evalFlag,
+        evaldir=evaldir,
+        lr_scheduler=scheduler
     )
     model_trainer.interleaved_train_and_eval(n_epochs)
