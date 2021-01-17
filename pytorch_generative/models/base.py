@@ -25,8 +25,6 @@ class GenerativeModel(abc.ABC, nn.Module):
     """
 
     def __call__(self, *args, **kwargs):
-        if getattr(self, "c", None) is None:
-            _, self._c, self._h, self._w = args[0].shape
         return super().__call__(*args, **kwargs)
 
     @property

@@ -12,7 +12,7 @@ import numpy as np
 import torchvision
 import matplotlib.pyplot as plt
 
-pathToCluster = r"/home/dsi/eyalbetzalel/image-gpt/downloads/kmeans_centers.npy"  # TODO : add path to cluster dir
+pathToCluster = "/home/dsi/coby_penso/projects/generative_models/VD_VAE/kmeans_centers.npy"  # TODO : add path to cluster dir
 global clusters
 clusters = torch.from_numpy(np.load(pathToCluster)).float()
 
@@ -93,9 +93,8 @@ class Trainer:
         self._epoch = 0
         self._examples_processed = 0
         self._time_taken = 0
-        self.hp_str = "ep_" + str(self._epoch) + "_ch_" + str(self.n_channels) + "_psb_" + str(self.n_pixel_snail_blocks) + "_resb_" + \
-            str(self.n_residual_blocks) + "_atval_" + str(self.attention_value_channels) + \
-            "_attk_" + str(self.attention_key_channels)
+        self.log_dir = log_dir
+        self.hp_str = "ep_" + str(self._epoch) 
         self._log_dir = (log_dir + "/" + self.hp_str + "_testEval") # or tempfile.mkdtemp()
         self._summary_writer = tensorboard.SummaryWriter(self.log_dir, max_queue=100)
         self.evalFlag = evalFlag
@@ -128,7 +127,6 @@ class Trainer:
 
     def load_from_checkpoint(self):
         """Attempts to load Trainer state from the internal log_dir."""
-        import ipdb; ipdb.set_trace()
         self._model.load_state_dict(torch.load(self._path(self.hp_str + "_model_state")))
         self._optimizer.load_state_dict(torch.load(self._path(self.hp_str + "_optimizer_state")))
         if self._lr_scheduler is not None:
@@ -293,7 +291,6 @@ class Trainer:
 
                 import pickle
                 pickle.dump(eval_results_arr, open(self.hp_str + "_eval.p", "wb"))
-                import ipdb; ipdb.set_trace()
                 break
 
                 loss = {key: loss / total_examples for key, loss in total_loss.items()}

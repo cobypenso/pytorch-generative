@@ -14,6 +14,9 @@ from torch import nn
 
 from pytorch_generative.models import base
 
+pathToCluster = "/home/dsi/coby_penso/projects/generative_models/VD_VAE/kmeans_centers.npy"  # TODO : add path to cluster dir
+global clusters
+clusters = torch.from_numpy(np.load(pathToCluster)).float()
 
 @dataclass
 class StackConfig:
@@ -386,8 +389,10 @@ class VeryDeepVAE(base.GenerativeModel):
             prior and the posterior. Note that the KL Divergence is NOT normalized by
             the dimension of the input.
         """
+        
+        x = torch.round(127.5 * (clusters[x.long()] + 1.0))
+        
         n = x.shape[0]
-
         # Bottom up encoding.
         x = self._input(x)
         mixins = []
@@ -422,7 +427,7 @@ class VeryDeepVAE(base.GenerativeModel):
 
 
 def reproduce(
-    n_epochs=500, batch_size=128, log_dir="/tmp/run", device="cuda", evalFlag , evaldir, debug_loader=None
+    n_epochs=500, batch_size=128, log_dir="/tmp/run", device="cuda", evalFlag=False , evaldir='tmp/log', debug_loader=None
 ):
     """Training script with defaults to reproduce results.
 
