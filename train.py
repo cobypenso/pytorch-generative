@@ -56,7 +56,7 @@ if __name__ == "__main__":
         choices=list(MODEL_DICT.keys()),
     )
     parser.add_argument(
-        "--n-epochs", type=int, help="number of training epochs", default=100
+        "--n-epochs", type=int, help="number of training epochs", default=300
     )
     parser.add_argument(
         "--batch-size",
