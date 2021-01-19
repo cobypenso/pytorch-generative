@@ -31,7 +31,7 @@ class Trainer:
         optimizer,
         train_loader,
         eval_loader,
-        save_checkpoint_epochs=10,
+        save_checkpoint_epochs=50,
         sample_epochs=50,
         lr_scheduler=None,
         device="cpu",
@@ -126,6 +126,7 @@ class Trainer:
         torch.save(self._time_taken, self._path(hp_str + "time_taken"))
 
     def load_from_checkpoint(self):
+        
         """Attempts to load Trainer state from the internal log_dir."""
         self.model.load_state_dict(torch.load(self._path(self.hp_str + "_model_state")))
         self._optimizer.load_state_dict(torch.load(self._path(self.hp_str + "_optimizer_state")))
@@ -148,7 +149,23 @@ class Trainer:
         loss = loss if isinstance(loss, dict) else {"loss": loss}
         assert "loss" in loss, 'Losses dictionary does not contain "loss" key.'
         return loss
+  
+    def _show_image(self, sample):
+        
+        sample = sample.permute(0,2,3,1)
+        sample = sample.reshape(-1, 512)
+        sample = torch.reshape(torch.multinomial(torch.exp(sample), 1), [-1, 32, 32])
+        sample = torch.round(127.5 * (clusters[sample.long()] + 1.0))
+        sample = sample.permute(0, 3, 1, 2)
 
+        cwd = os.getcwd()
+        dir = self._log_dir + "/samples"
+        if not os.path.exists(dir):
+            os.makedirs(dir)
+
+        f_name = dir + "/" + "sample_epoch_" + str(self._epoch) + "_image.png"
+        self.plot_images_grid(sample[0:16], f_name)
+        
     # TODO(eugenhotaj): Consider removing the 'training' argument and just using
     # self.model.parameters().training.
     def _log_loss_dict(self, loss_dict, training):
@@ -165,6 +182,7 @@ class Trainer:
         """
         x = x.to(self.device)
         preds = self.model(x)
+        
         loss = self.loss_fn(x, y, preds)
         return loss
 
@@ -175,7 +193,7 @@ class Trainer:
             y = y.to(self.device)
         self._optimizer.zero_grad()
         loss = self._get_loss_dict(self.train_one_batch(x, y))
-        loss["recon_loss"].backward()
+        loss["loss"].backward()
 
         norm = 0
         max_norm = self.clip_grad_norm or self.skip_grad_norm or None
@@ -195,7 +213,20 @@ class Trainer:
         Subclasses can override this method to define custom evaluation loops.
         """
         x = x.to(self.device)
+        # ----- x: [128,1024] ----- #
+        sample = (clusters[x.squeeze().long()] + 1.0) / 2
+        # ----- x: [128,1024, 3] ----- #
+        sample = sample[:,:,None,:]
+        # ----- x: [128,1024,1,3] ----- #
+        sample = torch.reshape(sample, [sample.shape[0], 32, 32, sample.shape[3]])
+        # ----- x: [128,32,32,3] ----- #
+        sample = sample.permute(0,3,1,2)
+        # ----- x: [128,3,32,32] ----- #
+        
+        self.plot_images_grid(sample[0:16], "input.png")
         preds = self.model(x)
+
+        self._show_image(preds[0])
         loss = self.loss_fn(x, y, preds)
         return loss
 
@@ -208,10 +239,9 @@ class Trainer:
             loss = self._get_loss_dict(self.eval_one_batch(x, y))
             return {k: v.item() for k, v in loss.items()}
 
-    def plot_images_grid(x: torch.tensor, export_img, title: str = '', nrow=8, padding=2, normalize=True,
+    def plot_images_grid(self, x: torch.tensor, export_img, title: str = '', nrow=8, padding=2, normalize=True,
                          pad_value=0):
         """Plot 4D Tensor of images of shape (B x C x H x W) as a grid."""
-
         grid = torchvision.utils.make_grid(x, nrow=nrow, padding=padding, normalize=normalize, pad_value=pad_value)
         npgrid = grid.cpu().numpy()
         im = np.transpose(npgrid, (1, 2, 0))
@@ -223,6 +253,53 @@ class Trainer:
         for epoch in range(n_epochs):
             start_time = time.time()
             print("------------------ Epoch = " + str(epoch) + " ------------------")
+
+            # Evaluate
+            if self.evalFlag:
+                
+                # Load Model
+                self.load_from_checkpoint() # Fix path
+                self.model.eval()
+                total_examples, total_loss = 0, collections.defaultdict(int)
+
+                eval_results_arr = []
+
+                # run evaluation on test set :
+
+                for batch in self.eval_loader:
+                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
+                    x, y = batch
+                    x, y = x.to('cuda'), y.to('cuda')
+                    n_examples = x.shape[0]
+                    total_examples += n_examples
+                    for key, loss in self._eval_one_batch(x, y).items():
+                        total_loss[key] += loss * n_examples
+
+                    sample = x.cpu().numpy()
+                    x_loss = (sample, loss)
+                    eval_results_arr.append(x_loss)
+
+                # run evaluation on train set :
+
+                for i, batch in enumerate(self.train_loader):
+                    batch = batch if isinstance(batch, (tuple, list)) else (batch, None)
+                    x, y = batch
+                    x, y = x.to('cuda'), y.to('cuda')
+                    n_examples = x.shape[0]
+                    total_examples += n_examples
+                    for key, loss in self._eval_one_batch(x, y).items():
+                        total_loss[key] += loss * n_examples
+
+                    sample = x.cpu().numpy()
+                    x_loss = (sample, loss)
+                    eval_results_arr.append(x_loss)
+
+                import pickle
+                pickle.dump(eval_results_arr, open(self.hp_str + "_eval.p", "wb"))
+                break
+
+                loss = {key: loss / total_examples for key, loss in total_loss.items()}
+                self._log_loss_dict(loss, training=False)
 
             # Train.
             epoch_loss = 0
