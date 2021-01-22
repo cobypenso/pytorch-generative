@@ -495,12 +495,12 @@ def reproduce(
     ]
     
     stack_configs_2 = [
-        StackConfig(n_encoder_blocks=6, n_decoder_blocks=7),
-        StackConfig(n_encoder_blocks=6, n_decoder_blocks=6),
-        StackConfig(n_encoder_blocks=5, n_decoder_blocks=5),
-        StackConfig(n_encoder_blocks=4, n_decoder_blocks=4),
-        StackConfig(n_encoder_blocks=3, n_decoder_blocks=3),
-        StackConfig(n_encoder_blocks=2, n_decoder_blocks=2),
+        StackConfig(n_encoder_blocks=15, n_decoder_blocks=7),
+        StackConfig(n_encoder_blocks=10, n_decoder_blocks=6),
+        StackConfig(n_encoder_blocks=10, n_decoder_blocks=5),
+        StackConfig(n_encoder_blocks=5, n_decoder_blocks=4),
+        StackConfig(n_encoder_blocks=5, n_decoder_blocks=3),
+        StackConfig(n_encoder_blocks=4, n_decoder_blocks=2),
     ]
     
     #In Channels = 3 , Out channels = 512#
@@ -513,9 +513,9 @@ def reproduce(
         stack_configs=stack_configs_2,
         latent_channels=16,
         hidden_channels=128, #instead of 64#
-        bottleneck_channels=32,
+        bottleneck_channels=64,
     )
-    optimizer = optim.Adam(model.parameters(), lr=5e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda _: 0.999977)
 
     def loss_fn(x, _, preds):
@@ -528,7 +528,7 @@ def reproduce(
         x_2d = x.view(B, W*H)
         
         recon_loss = torch.sum(criterion(preds_2d, x_2d.long()), dim=1)
-        elbo = recon_loss + 10 * kl_div
+        elbo = recon_loss + kl_div
         return {
             "recon_loss": recon_loss.mean(),
             "kl_div": kl_div.mean(),
